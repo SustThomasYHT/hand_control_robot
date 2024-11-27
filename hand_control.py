@@ -19,12 +19,12 @@ def calculate_finger_distance_kinect(body, hand_type='right'):
     """
     try:
         if hand_type == 'right':
-            thumb_tip = body.joints[pykinect.K4ABT_JOINT_HANDTIP_RIGHT]
-            middle_tip = body.joints[pykinect.K4ABT_JOINT_THUMB_RIGHT]
+            thumb_tip = body.joints[pykinect.K4ABT_JOINT_THUMB_RIGHT]
+            middle_tip = body.joints[pykinect.K4ABT_JOINT_HANDTIP_RIGHT]
             palm = body.joints[pykinect.K4ABT_JOINT_WRIST_RIGHT]
         else:
-            thumb_tip = body.joints[pykinect.K4ABT_JOINT_HANDTIP_LEFT]
-            middle_tip = body.joints[pykinect.K4ABT_JOINT_THUMB_LEFT]
+            thumb_tip = body.joints[pykinect.K4ABT_JOINT_THUMB_LEFT]
+            middle_tip = body.joints[pykinect.K4ABT_JOINT_HANDTIP_LEFT]
             palm = body.joints[pykinect.K4ABT_JOINT_WRIST_LEFT]
 
         # 计算拇指到中指的距离
@@ -54,7 +54,19 @@ def calculate_finger_distance_kinect(body, hand_type='right'):
         return None
 
 def draw_coordinate_system(image, body, body_frame, right_gripper_value=None, left_gripper_value=None):
-    """在图像上绘制坐标系参考、距离信息和左右手状态"""
+    """
+    在图像上绘制坐标系参考、距离信息和左右手状态
+    
+    Args:
+        image: 彩色图像
+        body: Kinect骨骼数据
+        body_frame: Kinect骨骼追踪器 暂时没用到
+        right_gripper_value: 右手手指捏合程度
+        left_gripper_value: 左手手指捏合程度
+        
+    Returns:
+        image: 绘制了坐标系、距离信息和左右手状态的图像
+    """
     # 获取图像尺寸
     height, width = image.shape[:2]
     
@@ -164,7 +176,7 @@ def map_hand_to_robot_coords(hand_pos):
     }
 
     def linear_map(value, in_min, in_max, out_min, out_max):
-        # 确保输入值在范围内
+        # 确保手部位置在一定范围内
         value = max(min(value, in_max), in_min)
         # 线性映射函数
         return (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
@@ -198,8 +210,8 @@ def control_gripper(mc, gripper_value):
     """
     try:
         # 将gripper_value反转并映射到夹爪控制范围
-        # 当手指完全张开(1.0)时夹爪打开(0)，手指闭合(0.0)时夹爪关闭(1)
-        gripper_state = 1 if gripper_value < 0.5 else 0
+        # 当手指完全张开(>0.6)时夹爪打开(0)，手指闭合(<0.6)时夹爪关闭(1)
+        gripper_state = 1 if gripper_value < 0.6 else 0
         
         # 设置夹爪状态，速度固定为80
         mc.set_gripper_state(gripper_state, 80)
@@ -219,7 +231,7 @@ def main():
     # 初始化库，启用身体追踪功能
     pykinect.initialize_libraries(track_body=True)
 
-    # 配置相机
+    # 配置kinect相机
     device_config = pykinect.default_configuration
     device_config.color_resolution = pykinect.K4A_COLOR_RESOLUTION_720P
     device_config.depth_mode = pykinect.K4A_DEPTH_MODE_WFOV_2X2BINNED
@@ -269,7 +281,7 @@ def main():
             combined_image = cv2.addWeighted(color_image[:,:,:3], 0.6, 
                                            depth_image_resized, 0.4, 0)
             
-            # 绘制骨骼
+            # 绘制kinect追踪到的人物骨骼
             combined_image = body_frame.draw_bodies(combined_image)
             
             # 水平翻转图像
@@ -295,20 +307,21 @@ def main():
             print(f"Depth image shape: {depth_image_resized.shape}")
             raise e
             
-        # 获取身体追踪数据
+        # 获取kinect追踪到的人体数量
         num_bodies = body_frame.get_num_bodies()
         
         if num_bodies > 0:
+            # 获取第一个人体
             body = body_frame.get_body(0)
             
-            # 计算右手夹爪值
+            # 计算右手手指捏合程度
             right_gripper = calculate_finger_distance_kinect(body, 'right')
             if right_gripper is not None:
                 current_right_gripper_value = right_gripper
-                # 控制夹爪
+                # 使用右手手指捏合程度控制夹爪
                 control_gripper(mc, current_right_gripper_value)
             
-            # 计算左手夹爪值
+            # 计算左手手指捏合程度
             left_gripper = calculate_finger_distance_kinect(body, 'left')
             if left_gripper is not None:
                 current_left_gripper_value = left_gripper
@@ -326,15 +339,15 @@ def main():
             # 映射到机器人坐标系
             robot_pos = map_hand_to_robot_coords(hand_pos)
             
-            # 控制机械臂移动
+            # 控制机械臂移动, 速度100, 头部移动路径为线性（1）
             mc.send_coords([
                 robot_pos['x'],
                 robot_pos['y'], 
                 robot_pos['z'],
                 0, 180, 90  # 保持末端姿态不变
-            ], 20, 0)
+            ], 100, 1)
             
-            # 更新显示
+            # 更新视频图像显示
             combined_image = draw_coordinate_system(
                 combined_image, 
                 body, 

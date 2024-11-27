@@ -14,7 +14,7 @@
 
 ### 2. 必要 SDK 下载
 1. **Azure Kinect SDK 1.4.0**
-   - 用途：连接深度相机
+   - 用途：连接深度相机，下载这个版本是因为pykinect-azure库默认支持这个版本，其他版本需要手动在初始化时配置
    - [下载链接](https://download.microsoft.com/download/4/5/a/45aa3917-45bf-4f24-b934-5cff74df73e1/Azure%20Kinect%20SDK%201.4.0.exe)
 
 2. **Azure Kinect Body Tracking SDK v1.1.2**
@@ -32,5 +32,5 @@
 
 ## 运行项目
 ### 1. 运行 `hand_control.py` 文件
-  - 可以看到一个视频窗口，显示关键信息
-  - 终端打印出 json 格式的信息(包括左右手的掌根3D位置以及手指张开程度)，详细见 [hand_control.py#L134](hand_control.py#L134)
+  - 可以看到一个视频窗口，显示关键信息，包括左右手的掌根3D位置以及手指张开程度
+  - 终端打印出 json 格式的信息，详细见 [hand_control.py#L146](hand_control.py#L146)
