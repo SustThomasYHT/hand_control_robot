@@ -6,6 +6,7 @@ from pykinect_azure import K4A_CALIBRATION_TYPE_COLOR
 from hand_control import map_hand_to_robot_coords
 import requests
 import time
+import concurrent.futures
 
 def init_kinect():
     # 初始化Kinect
@@ -31,8 +32,18 @@ def get_3d_position(device, depth_image, landmarks, image_shape):
     positions_3d = []
     valid_positions = 0
     
-    # 选择要检测的关键点索引（这里选择指尖和手掌中心点）
-    key_indices = [4, 8, 12, 16, 20, 0]  # 拇指尖、食指尖、中指尖、无名指尖、小指尖、手掌中心
+    # 选择要检测的关键点索引
+    # 0: 手掌中心
+    # 1-4: 拇指关键点
+    # 9-12: 中指关键点
+    # 13-16: 无名指关键点
+    # 17-20: 小指关键点
+    # 排除食指，因为食指用来控制夹爪了
+    key_indices = [0,  # 手掌中心
+                   1, 2, 3, 4,  # 拇指完整链
+                   10, 11, 12,  # 中指关键点（除指尖）
+                   14, 15, 16,  # 无名指关键点（除指尖）
+                   18, 19, 20]  # 小指关键点（除指尖）
     
     for idx in key_indices:
         # 获取2D坐标
@@ -93,108 +104,114 @@ def main():
     # 添加这些变量
     last_send_time = 0
     MIN_SEND_INTERVAL = 0.1  # 最小发送间隔（秒）
-    SERVER_URL = "http://localhost:5000"
+    SERVER_URL = "http://192.168.31.155:5000"
     last_position = None
     
     # 添加夹爪控制相关变量
     current_gesture_is_one = False
     last_gripper_state = None
     
-    while True:
-        # 获取Kinect数据
-        capture = device.update()
-        
-        # 获取彩色图像和深度图
-        ret_color, color_image = capture.get_color_image()
-        ret_depth, transformed_depth_image = capture.get_transformed_depth_image()
-        
-        if not ret_color or not ret_depth:
-            continue
+    # 创建线程池
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        while True:
+            # 获取Kinect数据
+            capture = device.update()
             
-        # 转换图像格式用于MediaPipe处理
-        color_image_rgb = cv2.cvtColor(color_image, cv2.COLOR_BGRA2RGB)
-        
-        # 手部检测
-        results = hand_detector.process(color_image_rgb)
-        
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                # 检测当前手势
-                gesture_is_one = is_one_finger(hand_landmarks.landmark)
+            # 获取彩色图像和深度图
+            ret_color, color_image = capture.get_color_image()
+            ret_depth, transformed_depth_image = capture.get_transformed_depth_image()
+            
+            if not ret_color or not ret_depth:
+                continue
                 
-                # 如果手势状态发生变化，发送夹爪控制请求
-                if gesture_is_one != current_gesture_is_one:
-                    current_gesture_is_one = gesture_is_one
-                    gripper_angle = 135 if gesture_is_one else 20
+            # 转换图像格式用于MediaPipe处理
+            color_image_rgb = cv2.cvtColor(color_image, cv2.COLOR_BGRA2RGB)
+            
+            # 手部检测
+            results = hand_detector.process(color_image_rgb)
+            
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    # 检测当前手势
+                    gesture_is_one = is_one_finger(hand_landmarks.landmark)
                     
-                    if gripper_angle != last_gripper_state:
-                        try:
-                            response = requests.post(
-                                f"{SERVER_URL}/gripper",
-                                json={"angle": gripper_angle},
-                                timeout=0.1
-                            )
-                            if response.status_code == 200:
-                                last_gripper_state = gripper_angle
-                                # 在画面上显示夹爪状态
-                                gripper_status = "夹紧" if gesture_is_one else "放松"
-                                cv2.putText(color_image, f"夹爪状态: {gripper_status}", 
-                                          (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 
-                                          1, (0, 255, 255), 2)
-                        except requests.exceptions.RequestException as e:
-                            print(f"发送夹爪控制请求失败: {e}")
-                
-                # 获取3D位置
-                position_3d, valid_count = get_3d_position(
-                    device, 
-                    transformed_depth_image, 
-                    hand_landmarks.landmark,
-                    color_image.shape
-                )
-                
-                # 绘制手部关键点
-                for landmark in hand_landmarks.landmark:
-                    x = int(landmark.x * color_image.shape[1])
-                    y = int(landmark.y * color_image.shape[0])
-                    cv2.circle(color_image, (x, y), 5, (0, 255, 0), -1)
-                
-                # 显示3D位置信息
-                if position_3d is not None:
-                    # 显示手部3D位置（白色）
-                    hand_pos = {'x': position_3d[0], 'y': position_3d[1], 'z': position_3d[2]}
-                    text = f"Hand Pos (mm): X:{position_3d[0]:.0f}, Y:{position_3d[1]:.0f}, Z:{position_3d[2]:.0f}"
-                    cv2.putText(color_image, text, (10, 30), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    # 如果手势状态发生变化，发送夹爪控制请求
+                    if gesture_is_one != current_gesture_is_one:
+                        current_gesture_is_one = gesture_is_one
+                        gripper_angle = 135 if gesture_is_one else 20
+                        
+                        if gripper_angle != last_gripper_state:
+                            # 使用线程池异步发送请求
+                            executor.submit(send_gripper_request, SERVER_URL, gripper_angle)
+                            last_gripper_state = gripper_angle
                     
-                    # 计算并显示机器人坐标（白色）
-                    robot_pos = map_hand_to_robot_coords(hand_pos)
-                    robot_text = f"Robot Pos: X:{robot_pos['x']:.2f}, Y:{robot_pos['y']:.2f}, Z:{robot_pos['z']:.2f}"
-                    cv2.putText(color_image, robot_text, (10, 70),
-                              cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    # 获取3D位置
+                    position_3d, valid_count = get_3d_position(
+                        device, 
+                        transformed_depth_image, 
+                        hand_landmarks.landmark,
+                        color_image.shape
+                    )
                     
-                    # 添加发送控制指令的逻辑
-                    current_time = time.time()
-                    if current_time - last_send_time >= MIN_SEND_INTERVAL:
-                        try:
-                            response = requests.post(
-                                f"{SERVER_URL}/move",
-                                json=robot_pos,
-                                timeout=0.1  # 设置超时时间
-                            )
-                            if response.status_code == 200:
-                                last_position = robot_pos
+                    # 绘制手部关键点
+                    for landmark in hand_landmarks.landmark:
+                        x = int(landmark.x * color_image.shape[1])
+                        y = int(landmark.y * color_image.shape[0])
+                        cv2.circle(color_image, (x, y), 5, (0, 255, 0), -1)
+                    
+                    # 显示3D位置信息
+                    if position_3d is not None:
+                        # 显示手部3D位置（白色）
+                        hand_pos = {'x': position_3d[0], 'y': position_3d[1], 'z': position_3d[2]}
+                        text = f"Hand Pos (mm): X:{position_3d[0]:.0f}, Y:{position_3d[1]:.0f}, Z:{position_3d[2]:.0f}"
+                        cv2.putText(color_image, text, (10, 30), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        
+                        # 计算并显示机器人坐标（白色）
+                        robot_pos = map_hand_to_robot_coords(hand_pos)
+                        robot_text = f"Robot Pos: X:{robot_pos['x']:.2f}, Y:{robot_pos['y']:.2f}, Z:{robot_pos['z']:.2f}"
+                        cv2.putText(color_image, robot_text, (10, 70),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        
+                        # 添加发送控制指令的逻辑
+                        current_time = time.time()
+                        if current_time - last_send_time >= MIN_SEND_INTERVAL:
+                            # 使用线程池异步发送请求
+                            executor.submit(send_move_request, SERVER_URL, robot_pos)
                             last_send_time = current_time
-                        except requests.exceptions.RequestException as e:
-                            print(f"发送请求失败: {e}")
+            
+            # 显示图像
+            cv2.imshow('Hand Tracking', color_image)
+            
+            if cv2.waitKey(1) == ord('q'):
+                break
         
-        # 显示图像
-        cv2.imshow('Hand Tracking', color_image)
-        
-        if cv2.waitKey(1) == ord('q'):
-            break
-    
-    device.close()
-    cv2.destroyAllWindows()
+        device.close()
+        cv2.destroyAllWindows()
+
+def send_gripper_request(server_url, gripper_angle):
+    try:
+        response = requests.post(
+            f"{server_url}/gripper",
+            json={"angle": gripper_angle},
+            timeout=0.1
+        )
+        if response.status_code == 200:
+            print(f"夹爪状态更新成功: {gripper_angle}")
+    except requests.exceptions.RequestException as e:
+        print(f"发送夹爪控制请求失败: {e}")
+
+def send_move_request(server_url, robot_pos):
+    try:
+        response = requests.post(
+            f"{server_url}/move",
+            json=robot_pos,
+            timeout=0.1
+        )
+        if response.status_code == 200:
+            print("机器人位置更新成功")
+    except requests.exceptions.RequestException as e:
+        print(f"发送请求失败: {e}")
 
 if __name__ == "__main__":
     main() 
