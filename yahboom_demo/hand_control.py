@@ -1,3 +1,31 @@
+import mediapipe as mp
+
+def init_hand_detector():
+    # 初始化MediaPipe手部检测
+    mp_hands = mp.solutions.hands
+    return mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5
+    )
+    
+def is_one_finger(landmarks):
+    """检测是否是数字1手势（只伸出食指）"""
+    # 获取各个手指的关键点
+    finger_tips = [8, 12, 16, 20]  # 食指、中指、无名指、小指的指尖索引
+    finger_mids = [6, 10, 14, 18]  # 对应的中间关节索引
+    
+    # 检查食指是否伸直，其他手指是否弯曲
+    is_index_up = landmarks[finger_tips[0]].y < landmarks[finger_mids[0]].y
+    other_fingers_down = all(
+        landmarks[finger_tips[i]].y > landmarks[finger_mids[i]].y
+        for i in range(1, 4)
+    )
+    
+    return is_index_up and other_fingers_down
+
+
 def map_hand_to_robot_coords(hand_pos):
     """将手部坐标映射到机器人坐标系"""
     # 手部工作空间范围

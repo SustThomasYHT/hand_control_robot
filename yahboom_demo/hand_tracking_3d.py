@@ -1,98 +1,11 @@
 import cv2
-import mediapipe as mp
-import numpy as np
-import pykinect_azure as pykinect
-from pykinect_azure import K4A_CALIBRATION_TYPE_COLOR
-from hand_control import map_hand_to_robot_coords
-import requests
 import time
 import concurrent.futures
 
-def init_kinect():
-    # 初始化Kinect
-    pykinect.initialize_libraries()
-    device_config = pykinect.default_configuration
-    device_config.color_format = pykinect.K4A_IMAGE_FORMAT_COLOR_BGRA32
-    device_config.color_resolution = pykinect.K4A_COLOR_RESOLUTION_720P
-    device_config.depth_mode = pykinect.K4A_DEPTH_MODE_WFOV_2X2BINNED
-    return pykinect.start_device(config=device_config)
+from hand_control import init_hand_detector, map_hand_to_robot_coords, is_one_finger
+from kinect_control import init_kinect, get_3d_position
+from request_control import send_gripper_request, send_move_request
 
-def init_hand_detector():
-    # 初始化MediaPipe手部检测
-    mp_hands = mp.solutions.hands
-    return mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=2,
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.5
-    )
-
-def get_3d_position(device, depth_image, landmarks, image_shape):
-    """获取手部关键点的3D位置"""
-    positions_3d = []
-    valid_positions = 0
-    
-    # 选择要检测的关键点索引
-    # 0: 手掌中心
-    # 1-4: 拇指关键点
-    # 9-12: 中指关键点
-    # 13-16: 无名指关键点
-    # 17-20: 小指关键点
-    # 排除食指，因为食指用来控制夹爪了
-    key_indices = [0,  # 手掌中心
-                   1, 2, 3, 4,  # 拇指完整链
-                   10, 11, 12,  # 中指关键点（除指尖）
-                   14, 15, 16,  # 无名指关键点（除指尖）
-                   18, 19, 20]  # 小指关键点（除指尖）
-    
-    for idx in key_indices:
-        # 获取2D坐标
-        x = int(landmarks[idx].x * image_shape[1])
-        y = int(landmarks[idx].y * image_shape[0])
-        
-        # 确保坐标在图像范围内
-        if 0 <= x < image_shape[1] and 0 <= y < image_shape[0]:
-            # 获取该点的深度值
-            depth = depth_image[y, x]
-            
-            if depth > 0:  # 确保深度值有效
-                # 转换为3D坐标
-                point_2d = pykinect.k4a_float2_t((x, y))
-                point_3d = device.calibration.convert_2d_to_3d(
-                    point_2d, 
-                    depth, 
-                    K4A_CALIBRATION_TYPE_COLOR, 
-                    K4A_CALIBRATION_TYPE_COLOR
-                )
-                
-                if point_3d is not None:
-                    # 将point_3d转换为numpy数组
-                    point_3d_array = np.array([point_3d.xyz.x, point_3d.xyz.y, point_3d.xyz.z])
-                    positions_3d.append(point_3d_array)
-                    valid_positions += 1
-    
-    if valid_positions > 0:
-        # 将列表转换为numpy数组后再计算平均值
-        positions_array = np.array(positions_3d)
-        avg_position = np.mean(positions_array, axis=0)
-        return avg_position, valid_positions
-    
-    return None, 0
-
-def is_one_finger(landmarks):
-    """检测是否是数字1手势（只伸出食指）"""
-    # 获取各个手指的关键点
-    finger_tips = [8, 12, 16, 20]  # 食指、中指、无名指、小指的指尖索引
-    finger_mids = [6, 10, 14, 18]  # 对应的中间关节索引
-    
-    # 检查食指是否伸直，其他手指是否弯曲
-    is_index_up = landmarks[finger_tips[0]].y < landmarks[finger_mids[0]].y
-    other_fingers_down = all(
-        landmarks[finger_tips[i]].y > landmarks[finger_mids[i]].y
-        for i in range(1, 4)
-    )
-    
-    return is_index_up and other_fingers_down
 
 def main():
     # 初始化设备
@@ -188,30 +101,6 @@ def main():
         
         device.close()
         cv2.destroyAllWindows()
-
-def send_gripper_request(server_url, gripper_angle):
-    try:
-        response = requests.post(
-            f"{server_url}/gripper",
-            json={"angle": gripper_angle},
-            timeout=0.1
-        )
-        if response.status_code == 200:
-            print(f"夹爪状态更新成功: {gripper_angle}")
-    except requests.exceptions.RequestException as e:
-        print(f"发送夹爪控制请求失败: {e}")
-
-def send_move_request(server_url, robot_pos):
-    try:
-        response = requests.post(
-            f"{server_url}/move",
-            json=robot_pos,
-            timeout=0.1
-        )
-        if response.status_code == 200:
-            print("机器人位置更新成功")
-    except requests.exceptions.RequestException as e:
-        print(f"发送请求失败: {e}")
 
 if __name__ == "__main__":
     main() 
