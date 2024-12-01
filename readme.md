@@ -7,7 +7,7 @@
   - 手掌根部的 3D 坐标
   - 手部骨骼关键点的 3D 坐标
 
-## 环境配置
+## 环境配置(Windows系统)
 
 ### 1. 官方文档
 - [Azure Kinect DK 中文文档](https://learn.microsoft.com/zh-cn/previous-versions/azure/kinect-dk/)

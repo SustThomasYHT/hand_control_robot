@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Kinect Hand Control</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        .feeds-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto auto;
+            gap: 20px;
+        }
+        .video-container {
+            position: relative;
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .video-feed {
+            width: 100%;
+            height: 300px;
+            object-fit: contain;
+            background: #000;
+            border-radius: 4px;
+        }
+        .control-panel {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .hand-data {
+            grid-column: 1 / -1;
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 0;
+            height: auto;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        h2 {
+            margin-top: 0;
+            color: #333;
+            font-size: 1.2em;
+        }
+        .control-switch {
+            display: inline-block;
+            margin: 10px 0;
+        }
+        .control-switch input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+        }
+        .robot-control {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+        .input-group {
+            margin: 10px 0;
+        }
+        .input-group label {
+            display: inline-block;
+            width: 60px;
+        }
+        .input-group input {
+            width: 80px;
+            padding: 5px;
+            margin-right: 10px;
+        }
+        button {
+            padding: 8px 15px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .robot-position {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e9e9e9;
+            border-radius: 4px;
+        }
+        .gripper-control {
+            margin-top: 10px;
+        }
+        .gripper-control input[type="range"] {
+            width: 200px;
+        }
+        .hand-data pre {
+            font-size: 16px;
+            line-height: 1.6;
+            background: #f8f8f8;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 0;
+            font-family: 'Consolas', monospace;
+            color: #333;
+        }
+        .hand-data h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 18px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="feeds-container">
+            <div class="video-container">
+                <h2>Color Feed</h2>
+                <img id="colorFeed" class="video-feed" alt="Color Feed">
+            </div>
+            <div class="video-container">
+                <h2>Depth Feed</h2>
+                <img id="depthFeed" class="video-feed" alt="Depth Feed">
+            </div>
+            <div class="hand-data">
+                <h3>Hand Data:</h3>
+                <pre id="handDataText"></pre>
+            </div>
+        </div>
+        <div class="control-panel">
+            <h2>Controls</h2>
+            <div class="control-switch">
+                <label>
+                    <input type="checkbox" id="robotControl"> Enable Robot Control
+                </label>
+            </div>
+            <div class="robot-position">
+                <h3>Robot Position:</h3>
+                <pre id="robotPosition">Waiting for data...</pre>
+            </div>
+            <div class="robot-control">
+                <h3>Manual Control:</h3>
+                <div class="input-group">
+                    <label>X:</label>
+                    <input type="number" id="xPos" step="1">
+                    <label>Y:</label>
+                    <input type="number" id="yPos" step="1">
+                    <label>Z:</label>
+                    <input type="number" id="zPos" step="1">
+                </div>
+                <button id="moveButton">Move Robot</button>
+            </div>
+            <div class="robot-control">
+                <h3>Gripper Control:</h3>
+                <div class="gripper-control">
+                    <input type="range" id="gripperAngle" min="0" max="180" value="90">
+                    <span id="gripperValue">90°</span>
+                    <button id="gripperButton">Set Gripper</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:8000/ws');
+        let imageCounter = 0;
+        let positionUpdateInterval = null;
+
+        async function updateRobotPosition() {
+            try {
+                const response = await fetch('http://localhost:5000/position');
+                const data = await response.json();
+                if (data.status === 'success') {
+                    document.getElementById('robotPosition').textContent = 
+                        JSON.stringify(data.data, null, 2);
+                }
+            } catch (error) {
+                console.error('获取机器人位置失败:', error);
+            }
+        }
+
+        async function moveRobot() {
+            const x = parseFloat(document.getElementById('xPos').value);
+            const y = parseFloat(document.getElementById('yPos').value);
+            const z = parseFloat(document.getElementById('zPos').value);
+
+            try {
+                const response = await fetch('http://localhost:5000/move', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ x, y, z })
+                });
+                const data = await response.json();
+                alert(data.message);
+            } catch (error) {
+                alert('移动失败: ' + error.message);
+            }
+        }
+
+        async function setGripper() {
+            const angle = parseInt(document.getElementById('gripperAngle').value);
+            try {
+                const response = await fetch('http://localhost:5000/gripper', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        angle: angle,
+                        speed: 500
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                }
+                
+                const data = await response.json();
+                console.log('夹爪控制响应:', data);
+                alert(data.message);
+            } catch (error) {
+                console.error('夹爪控制细错误:', error);
+                alert('控制夹爪失败: ' + error.toString());
+            }
+        }
+
+        document.getElementById('moveButton').addEventListener('click', moveRobot);
+        document.getElementById('gripperButton').addEventListener('click', setGripper);
+        document.getElementById('gripperAngle').addEventListener('input', function(e) {
+            document.getElementById('gripperValue').textContent = e.target.value + '°';
+        });
+
+        ws.onopen = function() {
+            ws.send(JSON.stringify({
+                type: 'robot_control',
+                enabled: false
+            }));
+        };
+
+        ws.onmessage = function(event) {
+            if (event.data instanceof Blob) {
+                const img = imageCounter % 2 === 0 ? 
+                    document.getElementById('colorFeed') : 
+                    document.getElementById('depthFeed');
+                img.src = URL.createObjectURL(event.data);
+                imageCounter++;
+            } else {
+                const data = JSON.parse(event.data);
+                if (data.type === 'hand_data') {
+                    document.getElementById('handDataText').textContent = 
+                        JSON.stringify(data.data, null, 2);
+                    
+                    if (document.getElementById('robotControl').checked) {
+                        if (data.data.position_update) {
+                            const robotPos = data.data.robot_position;
+                            fetch('http://localhost:5000/move', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    x: robotPos.x,
+                                    y: robotPos.y,
+                                    z: robotPos.z
+                                })
+                            }).catch(error => console.error('发送位置失败:', error));
+                        }
+
+                        if (data.data.gripper_update) {
+                            const gripperAngle = 180 - (data.data.gripper_value * 180);
+                            fetch('http://localhost:5000/gripper', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    angle: gripperAngle,
+                                    speed: 500
+                                })
+                            }).catch(error => console.error('控制夹爪失败:', error));
+                        }
+                    }
+                }
+            }
+        };
+
+        document.getElementById('robotControl').addEventListener('change', function(e) {
+            const enabled = e.target.checked;
+            
+            ws.send(JSON.stringify({
+                type: 'robot_control',
+                enabled: enabled
+            }));
+            
+            if (enabled) {
+                if (positionUpdateInterval) {
+                    clearInterval(positionUpdateInterval);
+                    positionUpdateInterval = null;
+                    document.getElementById('robotPosition').textContent = 
+                        "手部控制模式已启用，位置更新已暂停";
+                }
+            } else {
+                if (!positionUpdateInterval) {
+                    positionUpdateInterval = setInterval(updateRobotPosition, 1000);
+                }
+            }
+        });
+
+        positionUpdateInterval = setInterval(updateRobotPosition, 1000);
+
+        window.addEventListener('beforeunload', function() {
+            if (positionUpdateInterval) {
+                clearInterval(positionUpdateInterval);
+            }
+        });
+    </script>
+</body>
+</html> 
